@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: ./target/release/slatefree --help --lang en | grep -q "slatefree"
       # test builds: gh run download <run-id> -n slatefree-<OS>
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: slatefree-${{ runner.os }}
           path: target/release/slatefree${{ runner.os == 'Windows' && '.exe' || '' }}
