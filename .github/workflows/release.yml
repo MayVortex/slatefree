@@ -126,7 +126,7 @@ jobs:
           **Verify the download** (built by GitHub Actions from this tag): \`gh attestation verify <file> --repo ${GITHUB_REPOSITORY}\`, or compare with \`SHA256SUMS.txt\`.
           EOF
           cat notes.md
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           name: slatefree ${{ github.ref_name }}
           body_path: notes.md
