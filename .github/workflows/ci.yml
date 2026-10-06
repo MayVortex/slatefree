@@ -45,7 +45,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: clippy
         run: cargo clippy --locked --all-targets -- -D warnings
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: ruff
@@ -58,7 +58,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: cargo-deny (CVE/RustSec advisories, licenses, sources, banned crates)
         uses: EmbarkStudios/cargo-deny-action@v2
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: pip-audit (CVE in Python dependencies)
