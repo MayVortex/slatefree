@@ -1,0 +1,6 @@
+# ruff (Python linter) — run by CI. Default rules (pyflakes + core pycodestyle errors);
+# compact one-line statements are a deliberate style in this numeric code.
+line-length = 120
+
+[lint]
+ignore = ["E701", "E702", "E731", "E741"]

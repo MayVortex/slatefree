@@ -1,0 +1,5 @@
+# bandit configuration for CI.
+# B404/B603: subprocess is used on purpose — only to run ffmpeg with an argument list (no shell);
+#            .github/scripts/no_network.sh checks that ffmpeg is the only program launched.
+# B406:      xml.sax.saxutils is imported only for escape() when writing XML; nothing is parsed.
+skips: ["B404", "B603", "B406"]

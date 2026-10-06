@@ -10,7 +10,7 @@ handy for experimenting without a compiler. Console messages are in Russian.
 
 Output: <shoot>/SYNC/<shoot>_sync.xml (FCP7 XML for DaVinci Resolve) + sync_result.csv
 """
-import argparse, csv, fnmatch, json, math, os, re, struct, subprocess, sys, time
+import argparse, csv, fnmatch, math, os, re, struct, subprocess, sys, time
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from xml.sax.saxutils import escape
@@ -485,7 +485,7 @@ NOTE = {"check": "ПРОВЕРИТЬ: слабая корреляция",
 def write_xmeml(path, name, M, cams, clips, fps, label_offset):
     tb = round(fps); ntsc = abs(fps - tb) > 0.01
     RATE = f"<rate><timebase>{tb}</timebase><ntsc>{'TRUE' if ntsc else 'FALSE'}</ntsc></rate>"
-    url = lambda p: "file://localhost/" + p.replace("\\", "/").replace(" ", "%20")
+    url = lambda p: "file://localhost/" + p.replace("\\", "/").replace(" ", "%20").lstrip("/")
 
     # Resolve links a WAV only if XML extents lie inside the file:
     # start = first whole frame at/after file start, end = last whole frame before file end

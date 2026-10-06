@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [SemVer](https://semver.org/).
 
+## [1.2.0] - 2026-10-06
+
+### Added
+- macOS (universal: Apple Silicon + Intel) and Linux x64 release builds; `slatefree.command` for double-click use on
+  macOS. FFmpeg is found next to the program, on `PATH` or in Homebrew locations.
+- Release files are published with `SHA256SUMS.txt` and a build provenance attestation (`gh attestation verify`).
+- CI: builds and tests on Windows, macOS and Linux; CodeQL security analysis; cargo-deny (RustSec/CVE advisories,
+  licenses, sources, banned networking crates); pip-audit and bandit for the Python version; clippy and ruff;
+  a check that the code has no network access and launches only ffmpeg; Dependabot.
+
+### Fixed
+- File URLs in the XML for macOS/Linux paths (`file://localhost/Users/...`).
+- Error messages (ffmpeg missing, no recorder files) no longer close the window before they can be read.
+
 ## [1.1.0] - 2026-10-06
 
 ### Added
@@ -35,5 +49,6 @@ First public release.
 - English and Russian console messages (auto-detected from the Windows UI language, `--lang`).
 - Python version of the same program (`src_python/`) producing byte-identical XML.
 
+[1.2.0]: https://github.com/MayVortex/slatefree/releases/tag/v1.2.0
 [1.1.0]: https://github.com/MayVortex/slatefree/releases/tag/v1.1.0
 [1.0.0]: https://github.com/MayVortex/slatefree/releases/tag/v1.0.0

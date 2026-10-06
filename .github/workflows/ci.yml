@@ -10,7 +10,12 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
+    name: Build & test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -20,13 +25,45 @@ jobs:
       - name: Build
         run: cargo build --release --locked
       - name: Smoke test (help output)
-        shell: pwsh
-        run: |
-          $out = & .\target\release\slatefree.exe --help --lang en | Out-String
-          if ($out -notmatch 'slatefree') { Write-Error "unexpected help output"; exit 1 }
-      # test builds: gh run download <run-id> -n slatefree-exe
+        shell: bash
+        run: ./target/release/slatefree --help --lang en | grep -q "slatefree"
+      # test builds: gh run download <run-id> -n slatefree-<OS>
       - uses: actions/upload-artifact@v4
         with:
-          name: slatefree-exe
-          path: target/release/slatefree.exe
+          name: slatefree-${{ runner.os }}
+          path: target/release/slatefree${{ runner.os == 'Windows' && '.exe' || '' }}
           retention-days: 14
+
+  lint:
+    name: Lint (clippy, ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: ruff
+        run: pipx run ruff check src_python
+
+  security:
+    name: Security (dependencies, no-network)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: cargo-deny (CVE/RustSec advisories, licenses, sources, banned crates)
+        uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: pip-audit (CVE in Python dependencies)
+        run: pipx run pip-audit -r src_python/requirements.txt
+      - name: bandit (Python security lint)
+        run: pipx run bandit -r src_python -c src_python/bandit.yml
+      - name: No network access, only ffmpeg is launched
+        run: bash .github/scripts/no_network.sh

@@ -4,9 +4,11 @@
 
 **Sync multi-camera event footage to one continuous audio-recorder track — no clapper, no timecode box.**
 Drop the shoot folder on `slatefree.exe`, import the result into DaVinci Resolve, every clip is in place.
+Windows · macOS · Linux
 
 [![Release](https://img.shields.io/github/v/release/MayVortex/slatefree)](https://github.com/MayVortex/slatefree/releases/latest)
 [![CI](https://github.com/MayVortex/slatefree/actions/workflows/ci.yml/badge.svg)](https://github.com/MayVortex/slatefree/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/MayVortex/slatefree/actions/workflows/codeql.yml/badge.svg)](https://github.com/MayVortex/slatefree/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 [Русская версия](README.ru.md)
@@ -37,10 +39,10 @@ and the recorder at the bottom.
 - **Tells you what to check:** every clip gets a status; weak matches get a marker in Resolve and a line in a CSV report.
 - **Free DaVinci Resolve is enough** (no scripting API needed). Nothing is re-encoded; source files are never modified.
 
-## Quick start
+## Quick start (Windows)
 
 1. Download `slatefree-vX.Y.Z-windows-x64.zip` from [Releases](https://github.com/MayVortex/slatefree/releases/latest)
-   and unzip anywhere. Keep `ffmpeg.exe` next to `slatefree.exe`.
+   and unzip anywhere. Keep `ffmpeg.exe` next to `slatefree.exe`. (macOS and Linux: [see below](#macos).)
 2. Lay out the shoot like this (folder names are up to you; `AUDIO` is the default for the recorder):
 
    ```text
@@ -62,6 +64,26 @@ You get:
 | V1, V2, … | one video track per camera folder |
 | A1, A2, … | each camera's own audio, linked to its video |
 | last tracks | the recorder, one track per channel set (H4n 4CH: `I` built-in mics, `M` inputs) |
+
+### macOS
+
+1. Install FFmpeg once: `brew install ffmpeg` (get Homebrew at <https://brew.sh>).
+2. Download `slatefree-vX.Y.Z-macos-universal.tar.gz` (Apple Silicon and Intel) and double-click it to unpack.
+3. The binary is not signed with an Apple developer certificate, so macOS blocks it at first. Allow it once in
+   Terminal (drag the unpacked folder into the window after typing the command):
+
+   ```bash
+   xattr -dr com.apple.quarantine ~/Downloads/slatefree-v1.2.0-macos-universal
+   ```
+
+4. **Double-click `slatefree.command`**, drag the shoot folder into the Terminal window that opens, press Enter.
+   (Or in Terminal: `./slatefree "/Volumes/Work/2026-10-04 Wedding"`.)
+5. Import `<shoot>/SYNC/<shoot>_sync.xml` into DaVinci Resolve as above.
+
+### Linux
+
+Install FFmpeg from your distribution (`sudo apt install ffmpeg`, `sudo dnf install ffmpeg`, …), unpack
+`slatefree-vX.Y.Z-linux-x64.tar.gz` and run `./slatefree <shoot folder>`.
 
 ## Preparing the shoot
 
@@ -125,7 +147,8 @@ Please read before relying on it for a paid job.
 - **Tested on one real event so far:** Canon EOS 5D Mark III (MOV) + Canon EOS R8 (MP4) + Zoom H4n in 4CH mode,
   23.976 fps, 161 clips over ~6 h, imported into **DaVinci Resolve 21 (free) on Windows 11**. Other cameras,
   recorders and Resolve versions should work but are untested — reports are very welcome.
-- **Windows build only.** The source is plain Rust and should build on macOS/Linux, but that is untested.
+- **macOS and Linux builds** are produced and unit-tested by CI, but have not yet been tried on real footage or with
+  DaVinci Resolve for macOS/Linux — please report how it goes.
 - **Output is FCP 7 XML for DaVinci Resolve.** Premiere Pro may import it but is untested; there is no FCPX/AAF output.
 - **One recorder** per shoot is used as the master clock.
 - **One timeline frame rate;** clips at other rates are skipped. The sequence is written as 1920×1080
@@ -145,7 +168,8 @@ Please read before relying on it for a paid job.
 | Many `check` clips in one section | Usually very quiet or very noisy passages. Look at them; most are right. |
 | *“ALL clips have an invalid timecode”* / *“clips with an invalid timecode”* | The camera was in Rec Run or its timecode was reset. Sync still works (file creation time is used); switch the camera to Free Run for next time. |
 | Clips of one camera consistently off by seconds | The camera clock or time zone was changed during the event. |
-| `Cannot run ffmpeg` | Put `ffmpeg.exe` next to `slatefree.exe` (or have ffmpeg on `PATH`). |
+| `Cannot run ffmpeg` | Windows: put `ffmpeg.exe` next to `slatefree.exe`. macOS: `brew install ffmpeg`. Linux: install the `ffmpeg` package. |
+| macOS: *“cannot be opened because the developer cannot be verified”* | Run the `xattr -dr com.apple.quarantine …` command from the [macOS](#macos) section once. |
 
 ## Command line
 
@@ -186,8 +210,9 @@ slatefree.exe <shoot folder> [options]
 cargo build --release          # Windows with Rust + MSVC Build Tools
 ```
 
-Release binaries are built by GitHub Actions ([`.github/workflows/release.yml`](.github/workflows/release.yml)).
-To build on Windows without installing a toolchain, see [docs/BUILD.md](docs/BUILD.md) (disposable WSL distro).
+Release binaries for Windows, macOS (universal) and Linux are built by GitHub Actions
+([`.github/workflows/release.yml`](.github/workflows/release.yml)); every push to any branch also uploads test builds.
+See [docs/BUILD.md](docs/BUILD.md).
 
 The repository has two implementations of the same program:
 
@@ -196,6 +221,31 @@ The repository has two implementations of the same program:
 | [`src_rust/`](src_rust) | the released `slatefree.exe` (parallel, single file) | everyday use |
 | [`src_python/`](src_python) | the same algorithm in Python (NumPy/SciPy), byte-identical XML output | experimenting without a compiler: `pip install -r src_python/requirements.txt`, then `python src_python/slatefree.py <shoot folder>` |
 
+## Security and trust
+
+slatefree reads your footage and writes two files next to it; it **never touches the network** and launches no program
+other than **ffmpeg**. You don't have to take that on faith — every push is checked automatically:
+
+| Check | What it does |
+|---|---|
+| [CodeQL](https://codeql.github.com) (GitHub) | security static analysis of the Rust code, the Python code and the CI workflows |
+| [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) | fails on any known vulnerability (RustSec / CVE) in Rust dependencies, non-permissive licenses, crates not from crates.io, and any networking / TLS crate ([`deny.toml`](deny.toml)) |
+| [pip-audit](https://github.com/pypa/pip-audit) · [bandit](https://github.com/PyCQA/bandit) | known vulnerabilities in the Python dependencies · security lint of the Python code |
+| [clippy](https://github.com/rust-lang/rust-clippy) · [ruff](https://github.com/astral-sh/ruff) | linters, warnings are errors |
+| [no-network check](.github/scripts/no_network.sh) | no networking APIs/modules in the code; ffmpeg is the only external program |
+| [Dependabot](.github/dependabot.yml) | weekly dependency update proposals |
+
+**Release files are built by GitHub Actions from the tagged source** — nobody uploads binaries by hand. Each release
+carries `SHA256SUMS.txt` and a signed [build provenance attestation](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations);
+verify a download with the [GitHub CLI](https://cli.github.com):
+
+```bash
+gh attestation verify slatefree-v1.2.0-windows-x64.zip --repo MayVortex/slatefree
+```
+
+No tool can *prove* the absence of a backdoor; what these give you is open code, automated scrutiny of every change,
+and proof that the binary you run was built from exactly that code.
+
 ## Contributing
 
 Bug reports with your camera / recorder models and the console output are the most useful contribution —
@@ -203,5 +253,5 @@ see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-[MIT](LICENSE). Release archives include an unmodified FFmpeg build, which is licensed separately (GPL) —
+[MIT](LICENSE). The Windows release archive includes an unmodified FFmpeg build, which is licensed separately (GPL) —
 see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

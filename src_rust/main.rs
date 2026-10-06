@@ -65,16 +65,29 @@ macro_rules! tr {
 fn ffmpeg_path() -> &'static PathBuf {
     static P: OnceLock<PathBuf> = OnceLock::new();
     P.get_or_init(|| {
-        if let Ok(exe) = std::env::current_exe() {
-            for name in ["ffmpeg.exe", "ffmpeg"] {
-                let p = exe.with_file_name(name);
-                if p.exists() {
-                    return p;
-                }
-            }
+        let name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+        // 1) next to the program, 2) PATH, 3) Homebrew / usual Unix places (Finder-launched apps may lack PATH)
+        let mut dirs: Vec<PathBuf> =
+            std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)).into_iter().collect();
+        if let Some(path) = std::env::var_os("PATH") {
+            dirs.extend(std::env::split_paths(&path));
         }
-        PathBuf::from("ffmpeg")
+        if !cfg!(windows) {
+            dirs.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].map(PathBuf::from));
+        }
+        dirs.into_iter().map(|d| d.join(name)).find(|p| p.is_file()).unwrap_or_else(|| PathBuf::from(name))
     })
+}
+
+fn ffmpeg_hint() -> String {
+    if cfg!(target_os = "macos") {
+        tr!("Установите ffmpeg: brew install ffmpeg (https://brew.sh)", "Install ffmpeg: brew install ffmpeg (https://brew.sh)")
+    } else if cfg!(windows) {
+        tr!("Положите ffmpeg.exe рядом с slatefree.exe", "Put ffmpeg.exe next to slatefree.exe")
+    } else {
+        tr!("Установите ffmpeg из пакетов системы (например, sudo apt install ffmpeg)",
+            "Install ffmpeg from your distribution (e.g. sudo apt install ffmpeg)")
+    }
 }
 
 fn ffmpeg() -> Command {
@@ -160,6 +173,8 @@ fn probe(path: &Path) -> Media {
         Ok(o) => String::from_utf8_lossy(&o.stderr).replace('\r', ""),
         Err(e) => {
             eprintln!("{}", tr!("Не удалось запустить ffmpeg ({}): {}", "Cannot run ffmpeg ({}): {}", ffmpeg_path().display(), e));
+            eprintln!("{}", ffmpeg_hint());
+            pause_if_own_console();
             std::process::exit(2);
         }
     };
@@ -511,6 +526,7 @@ impl Master {
     fn new(mut takes: Vec<Take>, cache: &Path, max_clip_frames: usize) -> Master {
         if takes.is_empty() {
             eprintln!("{}", tr!("Нет WAV-записей рекордера с TimeReference (BWF)", "No recorder WAV files with a BWF TimeReference found"));
+            pause_if_own_console();
             std::process::exit(1);
         }
         let mut variants: Vec<String> = takes.iter().flat_map(|t| t.files.iter().map(|w| variant(&w.file))).collect();
@@ -1100,8 +1116,10 @@ fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
+/// file URL as FCP7 XML expects it: file://localhost/D:/x.mov (Windows), file://localhost/Users/x.mov (macOS/Linux)
 fn url(p: &Path) -> String {
-    format!("file://localhost/{}", p.to_string_lossy().replace('\\', "/").replace(' ', "%20"))
+    let s = p.to_string_lossy().replace('\\', "/").replace(' ', "%20");
+    format!("file://localhost/{}", s.trim_start_matches('/'))
 }
 
 fn write_xmeml(path: &Path, name: &str, m: &mut Master, cams: &[String], clips: &mut [Vec<Media>], fps: f64, label_offset: f64) {
@@ -1659,6 +1677,12 @@ mod tests {
         assert_eq!(variant("4CH002M.WAV"), "M");
         assert_eq!(variant("STE-001.wav"), "");
         assert_eq!(variant("ZOOM0001.WAV"), "");
+    }
+
+    #[test]
+    fn file_urls_for_both_platforms() {
+        assert_eq!(url(Path::new(r"D:\VIDEO\a b\x.MOV")), "file://localhost/D:/VIDEO/a%20b/x.MOV");
+        assert_eq!(url(Path::new("/Users/me/Shoot/x.MOV")), "file://localhost/Users/me/Shoot/x.MOV");
     }
 
     #[test]

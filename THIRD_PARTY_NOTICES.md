@@ -2,7 +2,7 @@
 
 ## FFmpeg (bundled in release archives)
 
-Release archives (`slatefree-*-windows-x64.zip`) contain an **unmodified** `ffmpeg.exe` build of
+The Windows release archive (`slatefree-*-windows-x64.zip`) contains an **unmodified** `ffmpeg.exe` build of
 [FFmpeg](https://ffmpeg.org), downloaded at release time from <https://www.gyan.dev/ffmpeg/builds/>
 (“release essentials” build). slatefree runs it as a separate program to read audio and metadata; it is not linked into
 slatefree.
@@ -11,6 +11,7 @@ That build is licensed under the **GNU General Public License v3**. Its license 
 (`FFMPEG_LICENSE*`), the exact version in `FFMPEG_VERSION.txt`. Source code for FFmpeg is available from
 <https://ffmpeg.org/download.html> and from the build provider's page above.
 slatefree itself is MIT-licensed; you may replace `ffmpeg.exe` with any other FFmpeg build.
+The macOS and Linux archives contain no FFmpeg; slatefree uses the one installed on the system.
 
 ## Rust crates (compiled into slatefree.exe)
 

@@ -1,0 +1,30 @@
+# cargo-deny configuration — run by CI on every push (see .github/workflows/ci.yml)
+
+[advisories]
+# fail on any known vulnerability (RustSec / CVE), unmaintained or yanked crate
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = ["MIT", "Apache-2.0", "Unicode-3.0"]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+# slatefree works offline; networking / TLS stacks have no business in the dependency tree
+deny = [
+    { name = "reqwest", reason = "no network access" },
+    { name = "hyper", reason = "no network access" },
+    { name = "ureq", reason = "no network access" },
+    { name = "curl", reason = "no network access" },
+    { name = "tokio", reason = "no network access" },
+    { name = "openssl", reason = "no network access" },
+    { name = "native-tls", reason = "no network access" },
+    { name = "rustls", reason = "no network access" },
+]
+
+[sources]
+# dependencies only from crates.io
+unknown-registry = "deny"
+unknown-git = "deny"

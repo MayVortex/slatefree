@@ -1,18 +1,20 @@
 # Building slatefree
 
 Release binaries are built automatically by GitHub Actions when a `v*` tag is pushed
-([`release.yml`](../.github/workflows/release.yml)): the workflow builds `slatefree.exe`, downloads FFmpeg and
-attaches `slatefree-vX.Y.Z-windows-x64.zip` to the GitHub release. You only need a local build to hack on the code.
+([`release.yml`](../.github/workflows/release.yml)): Windows (with FFmpeg), macOS universal (Apple Silicon + Intel)
+and Linux x64 archives, `SHA256SUMS.txt` and a build provenance attestation are attached to the GitHub release.
+You only need a local build to hack on the code.
 
 ## Test build without a local toolchain (GitHub Actions)
 
 Every push to any branch runs [`ci.yml`](../.github/workflows/ci.yml): tests, release build, and the built
-`slatefree.exe` is kept as a run artifact for 14 days. To try a change on your own footage:
+binaries for Windows, macOS and Linux are kept as run artifacts (`slatefree-Windows`, `slatefree-macOS`,
+`slatefree-Linux`) for 14 days. To try a change on your own footage:
 
 ```powershell
 git switch -c my-change; git commit -am "..."; git push -u origin my-change
 gh run watch                                   # wait for CI
-gh run download -n slatefree-exe -D test-build # slatefree.exe of the latest run on this branch
+gh run download -n slatefree-Windows -D test-build   # slatefree.exe of the latest run on this branch
 ```
 
 Put `ffmpeg.exe` next to it and run it on a shoot you have already checked in Resolve (see *Validating a change*).
@@ -41,8 +43,8 @@ wsl --unregister slatefree-build
 
 ## Linux / macOS
 
-`cargo build --release` should work (the Windows-only parts — console pause, UI language — are behind `cfg(windows)`),
-but this is untested. ffmpeg must be on `PATH` or next to the binary.
+`cargo build --release`. ffmpeg is looked up next to the binary, on `PATH`, then in `/opt/homebrew/bin`,
+`/usr/local/bin`, `/usr/bin`.
 
 ## Validating a change
 

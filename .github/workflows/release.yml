@@ -5,27 +5,29 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cargo.toml version matches tag
+        run: |
+          ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          [ "v$ver" = "${GITHUB_REF_NAME}" ] || { echo "::error::Cargo.toml version $ver does not match tag ${GITHUB_REF_NAME}"; exit 1; }
+
+  windows:
+    needs: check-version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-
-      - name: Check version matches tag
-        shell: pwsh
-        run: |
-          $ver = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
-          if ("v$ver" -ne "${{ github.ref_name }}") { Write-Error "Cargo.toml version $ver does not match tag ${{ github.ref_name }}"; exit 1 }
-
       - name: Test and build
         run: |
           cargo test --locked
           cargo build --release --locked
-
-      - name: Download FFmpeg
+      - name: Package (with FFmpeg)
         shell: pwsh
         run: |
           Invoke-WebRequest https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -OutFile ffmpeg.zip
@@ -36,32 +38,96 @@ jobs:
           Get-ChildItem $root.FullName -File | Where-Object { $_.Name -like 'LICENSE*' } |
             ForEach-Object { Copy-Item $_.FullName "dist\FFMPEG_$($_.Name)" }
           (& dist\ffmpeg.exe -version | Select-Object -First 1) | Out-File -Encoding utf8 dist\FFMPEG_VERSION.txt
-
-      - name: Package
-        shell: pwsh
-        run: |
           Copy-Item target\release\slatefree.exe, README.md, README.ru.md, LICENSE, CHANGELOG.md, THIRD_PARTY_NOTICES.md dist\
-          $zip = "slatefree-${{ github.ref_name }}-windows-x64.zip"
-          Compress-Archive -Path dist\* -DestinationPath $zip
-          "ZIP=$zip" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          New-Item -ItemType Directory out | Out-Null
+          Compress-Archive -Path dist\* -DestinationPath "out\slatefree-${{ github.ref_name }}-windows-x64.zip"
+      - uses: actions/upload-artifact@v4
+        with: { name: windows, path: out/* }
 
-      - name: Release notes from CHANGELOG
-        shell: pwsh
+  macos:
+    needs: check-version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Test
+        run: cargo test --locked
+      - name: Build universal binary (Apple Silicon + Intel)
         run: |
-          $ver = "${{ github.ref_name }}".TrimStart('v')
-          $lines = Get-Content CHANGELOG.md
-          $start = ($lines | Select-String -Pattern "^## \[$([regex]::Escape($ver))\]").LineNumber
-          $notes = @()
-          for ($i = $start; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match '^## \[' -or $lines[$i] -match '^\[.+\]: ') { break }
-            $notes += $lines[$i]
-          }
-          $notes += ''
-          $notes += '**Download:** `slatefree-${{ github.ref_name }}-windows-x64.zip` below → unzip → drag your shoot folder onto `slatefree.exe`. See the [README](https://github.com/${{ github.repository }}#quick-start).'
-          $notes | Out-File -Encoding utf8 notes.md
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+          mkdir -p dist out
+          lipo -create -output dist/slatefree \
+            target/aarch64-apple-darwin/release/slatefree target/x86_64-apple-darwin/release/slatefree
+          lipo -info dist/slatefree
+      - name: Package
+        run: |
+          cp packaging/macos/slatefree.command README.md README.ru.md LICENSE CHANGELOG.md THIRD_PARTY_NOTICES.md dist/
+          chmod +x dist/slatefree dist/slatefree.command
+          tar -czf "out/slatefree-${GITHUB_REF_NAME}-macos-universal.tar.gz" -C dist .
+      - uses: actions/upload-artifact@v4
+        with: { name: macos, path: out/* }
 
+  linux:
+    needs: check-version
+    runs-on: ubuntu-22.04   # older glibc → runs on more distributions
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test and build
+        run: |
+          cargo test --locked
+          cargo build --release --locked
+      - name: Package
+        run: |
+          mkdir -p dist out
+          cp target/release/slatefree README.md README.ru.md LICENSE CHANGELOG.md THIRD_PARTY_NOTICES.md dist/
+          chmod +x dist/slatefree
+          tar -czf "out/slatefree-${GITHUB_REF_NAME}-linux-x64.tar.gz" -C dist .
+      - uses: actions/upload-artifact@v4
+        with: { name: linux, path: out/* }
+
+  publish:
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write       # build provenance attestation
+      attestations: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - name: Checksums
+        run: cd out && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: out/slatefree-*
+      - name: Release notes from CHANGELOG
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          awk -v v="$ver" '
+            $0 ~ "^## \\[" v "\\]" {on=1; next}
+            on && (/^## \[/ || /^\[.+\]: /) {exit}
+            on {print}' CHANGELOG.md > notes.md
+          cat >> notes.md <<EOF
+
+          ## Download
+
+          | System | File | Then |
+          |---|---|---|
+          | Windows 10/11 | \`slatefree-${GITHUB_REF_NAME}-windows-x64.zip\` | unzip, drag the shoot folder onto \`slatefree.exe\` (FFmpeg included) |
+          | macOS (Apple Silicon & Intel) | \`slatefree-${GITHUB_REF_NAME}-macos-universal.tar.gz\` | \`brew install ffmpeg\`, unpack, double-click \`slatefree.command\` — see [macOS notes](https://github.com/${GITHUB_REPOSITORY}#macos) |
+          | Linux x64 | \`slatefree-${GITHUB_REF_NAME}-linux-x64.tar.gz\` | install ffmpeg from your distribution, run \`./slatefree <shoot folder>\` |
+
+          **Verify the download** (built by GitHub Actions from this tag): \`gh attestation verify <file> --repo ${GITHUB_REPOSITORY}\`, or compare with \`SHA256SUMS.txt\`.
+          EOF
+          cat notes.md
       - uses: softprops/action-gh-release@v2
         with:
           name: slatefree ${{ github.ref_name }}
           body_path: notes.md
-          files: ${{ env.ZIP }}
+          files: out/*
