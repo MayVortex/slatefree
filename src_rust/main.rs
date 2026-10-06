@@ -91,6 +91,7 @@ fn ffmpeg_hint() -> String {
 }
 
 fn ffmpeg() -> Command {
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut c = Command::new(ffmpeg_path());
     #[cfg(windows)]
     {
@@ -1048,7 +1049,9 @@ fn cross_camera(cams: &[String], per_cam: &mut [Vec<Media>]) {
                     continue;
                 }
                 let (uf, ud) = (u.final_t.unwrap(), u.dur);
-                let mut best: Option<((u8, f64), usize, usize, f64, f64)> = None;
+                // ((tier, -overlap), camera index, clip index, s0, s1) of the best partner so far
+                type Partner = ((u8, f64), usize, usize, f64, f64);
+                let mut best: Option<Partner> = None;
                 for &(pi, pj) in &idx {
                     let p = &per_cam[pi][pj];
                     if pi == ui || p.final_t.is_none() || !p.has_audio {
@@ -1627,7 +1630,7 @@ fn run() -> i32 {
                 None => st.push((c.status.clone(), 1)),
             }
         }
-        st.sort_by(|a, b| b.1.cmp(&a.1));
+        st.sort_by_key(|a| std::cmp::Reverse(a.1));
         println!("  {cam}: {}", st.iter().map(|(k, v)| format!("{k} {v}")).collect::<Vec<_>>().join(", "));
     }
     let chk: Vec<&str> = per_cam.iter().flatten().filter(|c| c.status == "check").map(|c| c.file.as_str()).collect();
