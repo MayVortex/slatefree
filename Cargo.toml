@@ -20,7 +20,7 @@ realfft = "3.4"
 regex = "1.11"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_Globalization"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Globalization"] }
 
 [profile.release]
 opt-level = 3
