@@ -1,0 +1,30 @@
+[package]
+name = "slatefree"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.82"
+description = "Sync multi-camera event footage to a continuous field-recorder track by audio and build a DaVinci Resolve timeline"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/MayVortex/slatefree"
+keywords = ["video", "audio-sync", "multicam", "davinci-resolve", "timecode"]
+categories = ["multimedia::audio", "multimedia::video", "command-line-utilities"]
+
+[[bin]]
+name = "slatefree"
+path = "src_rust/main.rs"
+
+[dependencies]
+rayon = "1.10"
+realfft = "3.4"
+regex = "1.11"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_Globalization"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

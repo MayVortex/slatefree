@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Check version matches tag
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$ver" -ne "${{ github.ref_name }}") { Write-Error "Cargo.toml version $ver does not match tag ${{ github.ref_name }}"; exit 1 }
+
+      - name: Test and build
+        run: |
+          cargo test --locked
+          cargo build --release --locked
+
+      - name: Download FFmpeg
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_src
+          $root = Get-ChildItem ffmpeg_src -Directory | Select-Object -First 1
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item "$($root.FullName)\bin\ffmpeg.exe" dist\
+          Get-ChildItem $root.FullName -File | Where-Object { $_.Name -like 'LICENSE*' } |
+            ForEach-Object { Copy-Item $_.FullName "dist\FFMPEG_$($_.Name)" }
+          (& dist\ffmpeg.exe -version | Select-Object -First 1) | Out-File -Encoding utf8 dist\FFMPEG_VERSION.txt
+
+      - name: Package
+        shell: pwsh
+        run: |
+          Copy-Item target\release\slatefree.exe, README.md, README.ru.md, LICENSE, CHANGELOG.md, THIRD_PARTY_NOTICES.md dist\
+          $zip = "slatefree-${{ github.ref_name }}-windows-x64.zip"
+          Compress-Archive -Path dist\* -DestinationPath $zip
+          "ZIP=$zip" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Release notes from CHANGELOG
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}".TrimStart('v')
+          $lines = Get-Content CHANGELOG.md
+          $start = ($lines | Select-String -Pattern "^## \[$([regex]::Escape($ver))\]").LineNumber
+          $notes = @()
+          for ($i = $start; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^## \[' -or $lines[$i] -match '^\[.+\]: ') { break }
+            $notes += $lines[$i]
+          }
+          $notes += ''
+          $notes += '**Download:** `slatefree-${{ github.ref_name }}-windows-x64.zip` below → unzip → drag your shoot folder onto `slatefree.exe`. See the [README](https://github.com/${{ github.repository }}#quick-start).'
+          $notes | Out-File -Encoding utf8 notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: slatefree ${{ github.ref_name }}
+          body_path: notes.md
+          files: ${{ env.ZIP }}

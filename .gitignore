@@ -1,0 +1,20 @@
+# Rust build output
+/target/
+
+# binaries (release assets are built by CI)
+*.exe
+
+# slatefree output and caches if a shoot is processed inside the repo
+SYNC/
+.cache/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS / editors
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,46 @@
+name: Sync problem / bug
+description: Clips end up in the wrong place, the program fails, or Resolve won't import the timeline
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Which clips are wrong and by how much (frames / seconds)? What did you expect?
+    validations:
+      required: true
+  - type: input
+    id: cameras
+    attributes:
+      label: Cameras
+      placeholder: "Canon 5D Mark III, 23.976p, TC Free Run; Sony A7 IV, 25p, no TC"
+    validations:
+      required: true
+  - type: input
+    id: recorder
+    attributes:
+      label: Recorder
+      placeholder: "Zoom H4n Pro, 4CH, 48 kHz / 24-bit"
+    validations:
+      required: true
+  - type: input
+    id: resolve
+    attributes:
+      label: DaVinci Resolve version and OS
+      placeholder: "Resolve 21.1 free, Windows 11"
+  - type: input
+    id: version
+    attributes:
+      label: slatefree version
+      placeholder: "v1.0.0"
+  - type: textarea
+    id: log
+    attributes:
+      label: Console output
+      description: Paste the full console output of slatefree.exe.
+      render: text
+  - type: textarea
+    id: csv
+    attributes:
+      label: Relevant rows of SYNC\sync_result.csv (optional)
+      render: text
