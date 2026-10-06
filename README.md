@@ -75,8 +75,13 @@ The rest makes it more reliable.
 - It must write **Broadcast WAV (BWF)** with a time stamp (`bext` TimeReference). Zoom H4n does; most current field
   recorders do. The recorder clock does **not** have to be correct.
 - Files split by the recorder at 2 GB are joined seamlessly. Several separate recordings are fine too.
-- Place it where it hears what the cameras hear (room / PA sound). Lavalier-only or line-only feeds sync worse;
-  on an H4n in 4CH mode the built-in X/Y mics (`…I.wav`) are used by default (`--ref-suffix M` switches to the inputs).
+- Place it where it hears what the cameras hear (room / PA sound). On an H4n in 4CH mode the built-in X/Y mics
+  (`…I.wav`) are used for sync by default (`--ref-suffix M` switches to the inputs).
+- **Recommended: take a feed from the mixing desk as two separate channels — one channel = the full mix
+  (music + mics), the other = the dry microphones only** (which is which doesn't matter). slatefree analyses the sum of both channels, so the mix keeps a sync signal
+  even when nobody is talking, while the editor later uses the dry-mics channel alone: clean speech without the background
+  music that is so hard to cut around. On an H4n, record this in 4CH mode so the built-in mics keep recording the room
+  (`…I.wav`) and the desk lands in `…M.wav` — both end up on the timeline as separate tracks.
 - Don't rename the WAV files (the `I`/`M` suffix tells the channel sets apart).
 - Copy only the recorder's own files into `AUDIO`. Mixes exported from an editor are skipped automatically
   (`--exclude` for anything else).
@@ -84,9 +89,11 @@ The rest makes it more reliable.
 ### Cameras
 
 - **Keep in-camera audio recording on** (built-in mic is fine). It is the only thing slatefree matches against.
-- **Timecode: Free Run (time of day), not Rec Run.** slatefree uses each camera's timecode — or the file's creation
-  time if there is no timecode — as a rough clock to know where to search. *Rec Run* timecode only counts recorded
-  time, so it doesn't work as a clock. (Canon: *Menu → Time code → Count up → Free run*.)
+- **Timecode: Free Run (time of day) is best.** slatefree uses each camera's timecode as a rough clock to know where
+  to search. Every clip's timecode is checked against the file's creation time: clips whose timecode doesn't behave
+  like a clock (*Rec Run*, which only counts recorded time, or a reset) are listed by name — or the whole folder is
+  flagged — and placed using the file creation time instead. That still works; Free Run just gives the most reliable
+  starting point. (Canon: *Menu → Time code → Count up → Free run*.)
 - Camera clocks don't need to match each other or the recorder, and jumps of a second at power-on are fine.
   Don't change the clock or time zone during the event.
 - **One frame rate for all main cameras.** Clips with a different rate (e.g. 50/60p slow motion) are skipped and listed in
@@ -97,8 +104,8 @@ The rest makes it more reliable.
 `<shoot>\SYNC\` contains:
 
 - `<shoot>_sync.xml` — the timeline (FCP 7 XML).
-- `sync_result.csv` — one row per clip: timeline timecode, status, correlation, drift inside long clips, notes
-  (`;`-separated, opens in Excel).
+- `sync_result.csv` — one row per clip: timecode check (`ok` / `bad` / `none`), timeline timecode, status,
+  correlation, drift inside long clips, notes (`;`-separated, opens in Excel).
 - `.cache\` — 8 kHz audio used for analysis; makes re-runs fast. Delete when done.
 
 ### Statuses (also shown as markers on the clips in Resolve)
@@ -115,13 +122,12 @@ The rest makes it more reliable.
 
 Please read before relying on it for a paid job.
 
-- **Tested on one real event so far:** Canon EOS 5D Mark III (MOV) + a Canon EOS (MP4) + Zoom H4n in 4CH mode,
+- **Tested on one real event so far:** Canon EOS 5D Mark III (MOV) + Canon EOS R8 (MP4) + Zoom H4n in 4CH mode,
   23.976 fps, 161 clips over ~6 h, imported into **DaVinci Resolve 21 (free) on Windows 11**. Other cameras,
   recorders and Resolve versions should work but are untested — reports are very welcome.
 - **Windows build only.** The source is plain Rust and should build on macOS/Linux, but that is untested.
 - **Output is FCP 7 XML for DaVinci Resolve.** Premiere Pro may import it but is untested; there is no FCPX/AAF output.
 - **One recorder** per shoot is used as the master clock.
-- **Rec Run timecode is not supported** (see *Cameras*).
 - **One timeline frame rate;** clips at other rates are skipped. The sequence is written as 1920×1080
   (Resolve conforms it to your project settings).
 - Where only one camera was shooting and the recorder was off, there is nothing to sync against — those clips are placed
@@ -137,7 +143,8 @@ Please read before relying on it for a paid job.
 | Resolve log: *“failed to link because the timecode extents do not match”* | Import the XML into a project where the clips are not yet in the media pool, or with the original, unmodified files. Don't transcode/rename files between running slatefree and importing. |
 | A whole camera is `unplaced` / *“no reliable match”* | The camera has no audio, or never overlaps with the recorder. Check that in-camera audio was on. |
 | Many `check` clips in one section | Usually very quiet or very noisy passages. Look at them; most are right. |
-| Clips of one camera consistently off by seconds | The camera timecode was Rec Run or the clock was changed during the event. |
+| *“ALL clips have an invalid timecode”* / *“clips with an invalid timecode”* | The camera was in Rec Run or its timecode was reset. Sync still works (file creation time is used); switch the camera to Free Run for next time. |
+| Clips of one camera consistently off by seconds | The camera clock or time zone was changed during the event. |
 | `Cannot run ffmpeg` | Put `ffmpeg.exe` next to `slatefree.exe` (or have ffmpeg on `PATH`). |
 
 ## Command line

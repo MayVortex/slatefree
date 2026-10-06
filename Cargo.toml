@@ -1,6 +1,6 @@
 [package]
 name = "slatefree"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 rust-version = "1.82"
 description = "Sync multi-camera event footage to a continuous field-recorder track by audio and build a DaVinci Resolve timeline"

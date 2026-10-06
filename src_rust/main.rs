@@ -9,7 +9,7 @@ use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
 use regex::Regex;
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{self, BufRead, Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, OnceLock};
@@ -118,6 +118,8 @@ struct Media {
     nf: i64,
     src0: i64,
     new_tc: String,
+    tc_state: String,
+    t_alt: Option<f64>,
 }
 
 fn snap_fps(f: f64) -> f64 {
@@ -744,19 +746,124 @@ fn ctime_seconds(ct: &str) -> f64 {
 
 // ------------------------------------------------------------------------- sync
 
-fn sync_camera(m: &Master, cam: &str, clips: &mut [Media]) {
-    // camera clock: TC label seconds; clips without TC use CreateDate + median(TC - CreateDate)
-    let both: Vec<f64> = clips
-        .iter()
-        .filter(|c| c.tc.is_some() && c.ctime.is_some())
-        .map(|c| tc_label_seconds(c.tc.as_ref().unwrap(), c.fps.unwrap()) - ctime_seconds(c.ctime.as_ref().unwrap()))
-        .collect();
-    let dc = if both.is_empty() { 0.0 } else { median(&both) };
+const TC_TOL: f64 = 3.0; // s: max spread of (timecode - file time) for a time-of-day clock
+
+/// per-camera result of the timecode check
+#[derive(Default)]
+struct TcInfo {
+    /// median (timecode - file creation time) of the clips with a valid time-of-day timecode
+    dc: Option<f64>,
+    /// file creation time marks the end of the recording (not the start)
+    ctime_end: bool,
+    n_tc: usize,
+    bad: Vec<String>,
+    none: Vec<String>,
+}
+
+fn wrap_day(d: f64) -> f64 {
+    (d + 43200.0).rem_euclid(86400.0) - 43200.0
+}
+
+/// largest group of values within a 2*tol window: (count, median of the group)
+fn densest(v: &[f64], tol: f64) -> (usize, f64) {
+    if v.is_empty() {
+        return (0, 0.0);
+    }
+    let mut s = v.to_vec();
+    s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let (mut bi, mut bj, mut j) = (0, 0, 0);
+    for i in 0..s.len() {
+        j = j.max(i);
+        while j + 1 < s.len() && s[j + 1] - s[i] <= 2.0 * tol {
+            j += 1;
+        }
+        if j - i > bj - bi {
+            bi = i;
+            bj = j;
+        }
+    }
+    (bj - bi + 1, median(&s[bi..=bj]))
+}
+
+/// Time-of-day (Free Run) timecode keeps a constant distance to the file creation time; Rec Run or a reset
+/// timecode does not. Clips outside the main group get tc_state "bad" and are placed by file time instead.
+fn check_timecodes(clips: &mut [Media]) -> TcInfo {
+    let idx: Vec<usize> = (0..clips.len()).filter(|&i| clips[i].tc.is_some() && clips[i].ctime.is_some()).collect();
+    let d_of = |c: &Media, end: bool| {
+        let tc = tc_label_seconds(c.tc.as_ref().unwrap(), c.fps.unwrap());
+        let ct = ctime_seconds(c.ctime.as_ref().unwrap()) - if end { c.dur } else { 0.0 };
+        wrap_day(tc - ct)
+    };
+    let ds: Vec<f64> = idx.iter().map(|&i| d_of(&clips[i], false)).collect();
+    let de: Vec<f64> = idx.iter().map(|&i| d_of(&clips[i], true)).collect();
+    let (cs, ms) = densest(&ds, TC_TOL);
+    let (ce, me) = densest(&de, TC_TOL);
+    let ctime_end = ce > cs;
+    let (d, center) = if ctime_end { (&de, me) } else { (&ds, ms) };
+    let n = idx.len();
+    let member: Vec<bool> = if n <= 2 { vec![true; n] } else { d.iter().map(|x| (x - center).abs() <= TC_TOL).collect() };
+    let cnt = member.iter().filter(|&&b| b).count();
+    let valid = n > 0 && (n <= 2 || (cnt >= 3 && cnt * 4 >= n));
+    let mut info = TcInfo { ctime_end, n_tc: n, ..Default::default() };
+    if valid {
+        let mv: Vec<f64> = d.iter().zip(&member).filter(|p| *p.1).map(|p| *p.0).collect();
+        info.dc = Some(median(&mv));
+    }
     for c in clips.iter_mut() {
-        c.t_cam = match (&c.tc, &c.ctime) {
-            (Some(tc), _) => Some(tc_label_seconds(tc, c.fps.unwrap())),
-            (None, Some(ct)) => Some(ctime_seconds(ct) + dc),
-            _ => None,
+        c.tc_state = if c.tc.is_none() { "none" } else if c.ctime.is_none() { "unverified" } else { "ok" }.into();
+    }
+    for (k, &i) in idx.iter().enumerate() {
+        if !(valid && member[k]) {
+            clips[i].tc_state = "bad".into();
+        }
+    }
+    info.bad = clips.iter().filter(|c| c.tc_state == "bad").map(|c| c.file.clone()).collect();
+    info.none = clips.iter().filter(|c| c.tc_state == "none").map(|c| c.file.clone()).collect();
+    info
+}
+
+fn report_timecodes(cam: &str, total: usize, info: &TcInfo) {
+    if !info.bad.is_empty() {
+        if info.bad.len() == info.n_tc {
+            println!("{}", tr!(
+                "  {}: у ВСЕХ клипов неправильный таймкод (похоже на Rec Run или сброс) — используется время создания файлов. На следующей съёмке включите Free Run.",
+                "  {}: ALL clips have an invalid timecode (looks like Rec Run or a reset) — file creation times are used instead. Set the camera to Free Run next time.",
+                cam));
+        } else {
+            println!("{}", tr!(
+                "  {}: клипы с неправильным таймкодом ({} из {}) — для них используется время создания файла: {}",
+                "  {}: clips with an invalid timecode ({} of {}) — their file creation time is used instead: {}",
+                cam, info.bad.len(), info.n_tc, info.bad.join(", ")));
+        }
+    }
+    if !info.none.is_empty() {
+        if info.none.len() == total {
+            println!("{}", tr!("  {}: у клипов нет таймкода — используется время создания файлов",
+                               "  {}: clips have no timecode — file creation times are used", cam));
+        } else {
+            println!("{}", tr!("  {}: клипы без таймкода — используется время создания файла: {}",
+                               "  {}: clips without timecode — file creation time is used: {}", cam, info.none.join(", ")));
+        }
+    }
+}
+
+fn sync_camera(m: &Master, cam: &str, clips: &mut [Media], info: &TcInfo) {
+    // camera clock: valid timecode as is; other clips: file creation time on the same scale
+    for c in clips.iter_mut() {
+        c.t_alt = None;
+        c.t_cam = if c.tc_state == "ok" || c.tc_state == "unverified" {
+            Some(tc_label_seconds(c.tc.as_ref().unwrap(), c.fps.unwrap()))
+        } else if let Some(ct) = &c.ctime {
+            let cs = ctime_seconds(ct);
+            match info.dc {
+                Some(dc) => Some(cs - if info.ctime_end { c.dur } else { 0.0 } + dc),
+                None => {
+                    c.t_alt = Some(cs - c.dur); // start vs end of recording decided by the audio below
+                    Some(cs)
+                }
+            }
+        } else {
+            None
         };
     }
     // global search (parallel over clips)
@@ -782,6 +889,27 @@ fn sync_camera(m: &Master, cam: &str, clips: &mut [Media]) {
             c.status = "unplaced".into();
         }
         return;
+    }
+    // no valid timecode at all: does the file time mark the start or the end of the recording?
+    let n_alt = cand.iter().filter(|c| c.t_alt.is_some()).count();
+    if n_alt >= 3 {
+        let mad = |o: Vec<f64>| {
+            let md = median(&o);
+            median(&o.iter().map(|v| (v - md).abs()).collect::<Vec<_>>())
+        };
+        let a = mad(cand.iter().map(|c| c.g_pos.unwrap() - c.t_cam.unwrap()).collect());
+        let b = mad(cand.iter().map(|c| c.g_pos.unwrap() - c.t_alt.unwrap_or(c.t_cam.unwrap())).collect());
+        if b < a {
+            for c in clips.iter_mut() {
+                if let Some(t) = c.t_alt {
+                    c.t_cam = Some(t);
+                }
+            }
+            cand = clips.iter().filter(|c| c.g_pos.is_some() && c.g_z >= 20.0 && c.dur >= 15.0).collect();
+            if cand.len() < 3 {
+                cand = clips.iter().filter(|c| c.g_pos.is_some() && c.g_z >= 12.0 && c.dur >= 8.0).collect();
+            }
+        }
     }
     let offs: Vec<f64> = cand.iter().map(|c| c.g_pos.unwrap() - c.t_cam.unwrap()).collect();
     let med = median(&offs);
@@ -1245,6 +1373,7 @@ fn wildcard(pat: &str, s: &str) -> bool {
 fn pause_if_own_console() {
     #[cfg(windows)]
     {
+        use std::io::{self, BufRead, Write};
         let mut buf = [0u32; 4];
         let n = unsafe { windows_sys::Win32::System::Console::GetConsoleProcessList(buf.as_mut_ptr(), 4) };
         if n == 1 {
@@ -1252,6 +1381,15 @@ fn pause_if_own_console() {
             let _ = io::stdout().flush();
             let _ = io::stdin().lock().lines().next();
         }
+    }
+}
+
+/// one field of the ';'-separated report, quoted like Python's csv module when needed
+fn csv_field(v: &str) -> String {
+    if v.contains([';', '"', '\n', '\r']) {
+        format!("\"{}\"", v.replace('"', "\"\""))
+    } else {
+        v.to_string()
     }
 }
 
@@ -1379,13 +1517,28 @@ fn run() -> i32 {
         );
     }
 
+    let mut per_cam: Vec<Vec<Media>> = cams.iter().map(|_| Vec::new()).collect();
+    for c in clips_ok {
+        let i = cams.iter().position(|x| x == &c.cam).unwrap();
+        per_cam[i].push(c);
+    }
+    println!("{}", tr!("Проверка таймкода…", "Checking timecode…"));
+    let tc_infos: Vec<TcInfo> = per_cam.iter_mut().map(|cc| check_timecodes(cc)).collect();
+    let mut tc_problems = false;
+    for ((cam, cc), info) in cams.iter().zip(&per_cam).zip(&tc_infos) {
+        tc_problems |= !info.bad.is_empty() || !info.none.is_empty();
+        report_timecodes(cam, cc.len(), info);
+    }
+    if !tc_problems {
+        println!("{}", tr!("  таймкод у всех клипов в порядке", "  all clips have a valid timecode"));
+    }
+
     let takes = Master::group(wavs, &a.ref_suffix);
     let mut need: Vec<PathBuf> = takes.iter().map(|t| t.files[t.ref_i].path.clone()).collect();
-    need.extend(clips_ok.iter().filter(|c| c.has_audio).map(|c| c.path.clone()));
+    need.extend(per_cam.iter().flatten().filter(|c| c.has_audio).map(|c| c.path.clone()));
     println!("{}", tr!("Извлечение звука ({} файлов, кэш в {})…", "Extracting audio ({} files, cache in {})…", need.len(), cache.display()));
     io_pool.install(|| need.par_iter().for_each(|p| extract(p, &cache)));
-    let mut clips_ok = clips_ok;
-    for c in clips_ok.iter_mut() {
+    for c in per_cam.iter_mut().flatten() {
         c.cache = cache_path(&cache, &c.file);
         if c.has_audio && fs::metadata(&c.cache).map(|m| m.len()).unwrap_or(0) < (SR * 4) as u64 {
             c.has_audio = false;
@@ -1393,18 +1546,13 @@ fn run() -> i32 {
     }
     lap(tr!("извлечение звука", "audio extraction"));
 
-    let max_clip_frames = clips_ok.iter().map(|c| (c.dur * ESR as f64) as usize + ESR).max().unwrap_or(0);
+    let max_clip_frames = per_cam.iter().flatten().map(|c| (c.dur * ESR as f64) as usize + ESR).max().unwrap_or(0);
     let mut m = Master::new(takes, &cache, max_clip_frames);
     lap(tr!("признаки рекордера", "recorder features"));
 
     println!("{}", tr!("Синхронизация…", "Syncing…"));
-    let mut per_cam: Vec<Vec<Media>> = cams.iter().map(|_| Vec::new()).collect();
-    for c in clips_ok {
-        let i = cams.iter().position(|x| x == &c.cam).unwrap();
-        per_cam[i].push(c);
-    }
-    for (cam, cc) in cams.iter().zip(per_cam.iter_mut()) {
-        sync_camera(&m, cam, cc);
+    for ((cam, cc), info) in cams.iter().zip(per_cam.iter_mut()).zip(&tc_infos) {
+        sync_camera(&m, cam, cc, info);
         lap(tr!("синхронизация {}", "sync {}", cam));
     }
     cross_camera(&cams, &mut per_cam);
@@ -1425,19 +1573,30 @@ fn run() -> i32 {
     // csv
     let mut rows: Vec<&Media> = per_cam.iter().flatten().collect();
     rows.sort_by_key(|c| c.tl.unwrap_or(i64::MAX));
-    let mut csv = String::from("\u{feff}camera;file;fps;duration_s;orig_tc;timeline_tc;status;r;r_second;intra_drift_ms;note\r\n");
+    let mut csv = String::from("\u{feff}");
+    let mut row = |f: [String; 12]| {
+        csv += &f.iter().map(|v| csv_field(v)).collect::<Vec<_>>().join(";");
+        csv += "\r\n";
+    };
+    row([
+        "camera", "file", "fps", "duration_s", "orig_tc", "tc_check", "timeline_tc", "status", "r", "r_second",
+        "intra_drift_ms", "note",
+    ]
+    .map(String::from));
     for c in rows {
-        csv += &format!(
-            "{};{};{:.3};{:.2};{};{};{};{:.2};{:.2};{};{}\r\n",
-            c.cam, c.file, c.fps.unwrap_or(0.0), c.dur, c.tc.clone().unwrap_or_default(), c.new_tc, c.status, c.r, c.r2,
-            c.drift_ms.map(|d| format!("{:.0}", d)).unwrap_or_default(), c.note
-        );
+        row([
+            c.cam.clone(), c.file.clone(), format!("{:.3}", c.fps.unwrap_or(0.0)), format!("{:.2}", c.dur),
+            c.tc.clone().unwrap_or_default(), c.tc_state.clone(), c.new_tc.clone(), c.status.clone(),
+            format!("{:.2}", c.r), format!("{:.2}", c.r2),
+            c.drift_ms.map(|d| format!("{:.0}", d)).unwrap_or_default(), c.note.clone(),
+        ]);
     }
     for c in &skipped {
-        csv += &format!(
-            "{};{};{:.3};{:.2};{};;skipped-fps;;;;\r\n",
-            c.cam, c.file, c.fps.unwrap_or(0.0), c.dur, c.tc.clone().unwrap_or_default()
-        );
+        row([
+            c.cam.clone(), c.file.clone(), format!("{:.3}", c.fps.unwrap_or(0.0)), format!("{:.2}", c.dur),
+            c.tc.clone().unwrap_or_default(), String::new(), String::new(), "skipped-fps".into(),
+            String::new(), String::new(), String::new(), String::new(),
+        ]);
     }
     fs::write(out.join("sync_result.csv"), csv).expect("write csv");
 
@@ -1503,6 +1662,13 @@ mod tests {
     }
 
     #[test]
+    fn csv_fields_are_quoted_like_python() {
+        assert_eq!(csv_field("22:19:57;18"), "\"22:19:57;18\"");
+        assert_eq!(csv_field("say \"hi\""), "\"say \"\"hi\"\"\"");
+        assert_eq!(csv_field("plain"), "plain");
+    }
+
+    #[test]
     fn wildcard_masks() {
         assert!(wildcard("summ*.wav", "SUMM.WAV"));
         assert!(wildcard("*_proxy*", "clip_proxy_01.mov"));
@@ -1520,6 +1686,50 @@ mod tests {
         }
         // even size: window [i-2, i+1] -> uniform_filter1d([1,2,3,4,5], 4)[2] == 2.5
         assert!((uniform_reflect(&[1.0, 2.0, 3.0, 4.0, 5.0], 4)[2] - 2.5).abs() < 1e-12);
+    }
+
+    /// clip starting at `start` s of day (file time) with timecode label `tc` s, duration `dur`
+    fn clip(name: &str, start: u32, tc: Option<u32>, dur: f64) -> Media {
+        let hms = |t: u32| format!("{:02}:{:02}:{:02}", t / 3600, t / 60 % 60, t % 60);
+        Media {
+            file: name.into(),
+            dur,
+            fps: Some(25.0),
+            tc: tc.map(|t| format!("{}:00", hms(t))),
+            ctime: Some(format!("2026-10-04T{}.000000Z", hms(start))),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn timecode_free_run_is_valid() {
+        // time-of-day TC 18:47 behind the file clock (like a camera with a wrong TC preset) — still a clock
+        let mut v: Vec<Media> = (0..10).map(|i| clip(&format!("c{i}"), 60000 + i * 300, Some(60000 + i * 300 - 1127), 40.0)).collect();
+        let info = check_timecodes(&mut v);
+        assert!(info.bad.is_empty() && info.none.is_empty());
+        assert_eq!(info.dc, Some(-1127.0));
+        assert!(!info.ctime_end);
+    }
+
+    #[test]
+    fn timecode_rec_run_is_detected() {
+        // Rec Run: TC counts recorded time only (40 s clips, several minutes apart)
+        let mut v: Vec<Media> = (0..10).map(|i| clip(&format!("c{i}"), 60000 + i * 300, Some(i * 40), 40.0)).collect();
+        let info = check_timecodes(&mut v);
+        assert_eq!(info.bad.len(), 10);
+        assert_eq!(info.n_tc, 10);
+        assert!(info.dc.is_none());
+    }
+
+    #[test]
+    fn timecode_partial_problem_lists_clips() {
+        let mut v: Vec<Media> = (0..8).map(|i| clip(&format!("c{i}"), 60000 + i * 300, Some(60000 + i * 300), 20.0)).collect();
+        v[3].tc = Some("00:00:12:00".into()); // reset timecode
+        v.push(clip("notc", 63000, None, 20.0));
+        let info = check_timecodes(&mut v);
+        assert_eq!(info.bad, vec!["c3".to_string()]);
+        assert_eq!(info.none, vec!["notc".to_string()]);
+        assert_eq!(info.dc, Some(0.0));
     }
 
     #[test]

@@ -258,16 +258,80 @@ def ctime_seconds(ct):
 
 # --------------------------------------------------------------------------- sync
 
-def sync_camera(M, cam, clips):
-    """place every clip of one camera on the recorder clock"""
-    # camera clock: TC label seconds; clips without TC use CreateDate + median(TC - CreateDate)
-    both = [tc_label_seconds(c["tc"], c["fps"]) - ctime_seconds(c["ctime"]) for c in clips if c["tc"] and c["ctime"]]
-    dc = float(np.median(both)) if both else 0.0
+TC_TOL = 3.0         # s: max spread of (timecode - file time) for a time-of-day clock
+
+def wrap_day(d):
+    return (d + 43200.0) % 86400.0 - 43200.0
+
+def densest(v, tol):
+    """largest group of values within a 2*tol window: (count, median of the group)"""
+    if not v:
+        return 0, 0.0
+    s = sorted(v)
+    bi = bj = j = 0
+    for i in range(len(s)):
+        j = max(j, i)
+        while j + 1 < len(s) and s[j + 1] - s[i] <= 2 * tol:
+            j += 1
+        if j - i > bj - bi:
+            bi, bj = i, j
+    return bj - bi + 1, float(np.median(s[bi:bj + 1]))
+
+def check_timecodes(clips):
+    """Time-of-day (Free Run) timecode keeps a constant distance to the file creation time; Rec Run or a
+    reset timecode does not. Clips outside the main group get tc_state 'bad' and are placed by file time."""
+    idx = [c for c in clips if c["tc"] and c["ctime"]]
+    def d_of(c, end):
+        ct = ctime_seconds(c["ctime"]) - (c["dur"] if end else 0.0)
+        return wrap_day(tc_label_seconds(c["tc"], c["fps"]) - ct)
+    ds = [d_of(c, False) for c in idx]
+    de = [d_of(c, True) for c in idx]
+    cs, ms = densest(ds, TC_TOL)
+    ce, me = densest(de, TC_TOL)
+    ctime_end = ce > cs
+    d, center = (de, me) if ctime_end else (ds, ms)
+    n = len(idx)
+    member = [True] * n if n <= 2 else [abs(x - center) <= TC_TOL for x in d]
+    cnt = sum(member)
+    valid = n > 0 and (n <= 2 or (cnt >= 3 and cnt * 4 >= n))
+    info = {"ctime_end": ctime_end, "n_tc": n,
+            "dc": float(np.median([x for x, m in zip(d, member) if m])) if valid else None}
     for c in clips:
-        if c["tc"]:
+        c["tc_state"] = "none" if not c["tc"] else ("unverified" if not c["ctime"] else "ok")
+    for c, m in zip(idx, member):
+        if not (valid and m):
+            c["tc_state"] = "bad"
+    info["bad"] = [c["file"] for c in clips if c["tc_state"] == "bad"]
+    info["none"] = [c["file"] for c in clips if c["tc_state"] == "none"]
+    return info
+
+def report_timecodes(cam, total, info):
+    if info["bad"]:
+        if len(info["bad"]) == info["n_tc"]:
+            print(f"  {cam}: у ВСЕХ клипов неправильный таймкод (похоже на Rec Run или сброс) — используется время "
+                  f"создания файлов. На следующей съёмке включите Free Run.")
+        else:
+            print(f"  {cam}: клипы с неправильным таймкодом ({len(info['bad'])} из {info['n_tc']}) — для них "
+                  f"используется время создания файла: {', '.join(info['bad'])}")
+    if info["none"]:
+        if len(info["none"]) == total:
+            print(f"  {cam}: у клипов нет таймкода — используется время создания файлов")
+        else:
+            print(f"  {cam}: клипы без таймкода — используется время создания файла: {', '.join(info['none'])}")
+
+def sync_camera(M, cam, clips, info):
+    """place every clip of one camera on the recorder clock"""
+    # camera clock: valid timecode as is; other clips: file creation time on the same scale
+    for c in clips:
+        c["t_alt"] = None
+        if c["tc_state"] in ("ok", "unverified"):
             c["t_cam"] = tc_label_seconds(c["tc"], c["fps"])
         elif c["ctime"]:
-            c["t_cam"] = ctime_seconds(c["ctime"]) + dc
+            cs = ctime_seconds(c["ctime"])
+            if info["dc"] is not None:
+                c["t_cam"] = cs - (c["dur"] if info["ctime_end"] else 0.0) + info["dc"]
+            else:
+                c["t_cam"], c["t_alt"] = cs, cs - c["dur"]   # start vs end decided by the audio below
         else:
             c["t_cam"] = None
     for c in clips:
@@ -285,6 +349,20 @@ def sync_camera(M, cam, clips):
         for c in clips:
             c["status"] = "unplaced"
         return
+    # no valid timecode at all: does the file time mark the start or the end of the recording?
+    if sum(1 for c in cand if c["t_alt"] is not None) >= 3:
+        def mad(o):
+            md = np.median(o)
+            return float(np.median(np.abs(np.array(o) - md)))
+        a_ = mad([c["g_pos"] - c["t_cam"] for c in cand])
+        b_ = mad([c["g_pos"] - (c["t_alt"] if c["t_alt"] is not None else c["t_cam"]) for c in cand])
+        if b_ < a_:
+            for c in clips:
+                if c["t_alt"] is not None:
+                    c["t_cam"] = c["t_alt"]
+            cand = [c for c in clips if c["g_pos"] is not None and c["g_z"] >= 20 and c["dur"] >= 15]
+            if len(cand) < 3:
+                cand = [c for c in clips if c["g_pos"] is not None and c["g_z"] >= 12 and c["dur"] >= 8]
     offs = np.array([c["g_pos"] - c["t_cam"] for c in cand])
     med = np.median(offs)
     anchors = [(c["t_cam"], o) for c, o in zip(cand, offs) if abs(o - med) < 3]
@@ -557,6 +635,15 @@ def main():
         print(f"Пропущено {len(skipped)} клипов с другой частотой кадров (таймлайн {fps:.3f}): "
               f"{', '.join(sorted(c['file'] for c in skipped)[:8])}{' …' if len(skipped) > 8 else ''}")
 
+    print("Проверка таймкода…")
+    tc_infos = {}
+    for cam in cams:
+        cc = [c for c in clips if c["cam"] == cam]
+        tc_infos[cam] = check_timecodes(cc)
+        report_timecodes(cam, len(cc), tc_infos[cam])
+    if not any(i["bad"] or i["none"] for i in tc_infos.values()):
+        print("  таймкод у всех клипов в порядке")
+
     need = [w["path"] for w in wavs] + [c["path"] for c in clips if c["has_audio"]]
     print(f"Извлечение звука ({len(need)} файлов, кэш в {cache})…")
     with ThreadPoolExecutor(a.jobs) as ex:
@@ -571,7 +658,7 @@ def main():
     lap("признаки рекордера")
     print("Синхронизация…")
     for cam in cams:
-        sync_camera(M, cam, [c for c in clips if c["cam"] == cam])
+        sync_camera(M, cam, [c for c in clips if c["cam"] == cam], tc_infos[cam])
         lap(f"синхронизация {cam}")
     cross_camera(cams, clips)
     lap("камера ↔ камера")
@@ -586,15 +673,15 @@ def main():
 
     with open(os.path.join(out, "sync_result.csv"), "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f, delimiter=";")
-        w.writerow(["camera", "file", "fps", "duration_s", "orig_tc", "timeline_tc", "status", "r", "r_second",
-                    "intra_drift_ms", "note"])
+        w.writerow(["camera", "file", "fps", "duration_s", "orig_tc", "tc_check", "timeline_tc", "status", "r",
+                    "r_second", "intra_drift_ms", "note"])
         for c in sorted(clips, key=lambda c: c.get("tl", 1e12)):
-            w.writerow([c["cam"], c["file"], c["fps"], round(c["dur"], 2), c["tc"] or "", c.get("new_tc", ""),
-                        c.get("status"), round(c.get("r", 0), 2), round(c.get("r2", 0), 2),
+            w.writerow([c["cam"], c["file"], f"{c['fps']:.3f}", f"{c['dur']:.2f}", c["tc"] or "", c["tc_state"],
+                        c.get("new_tc", ""), c.get("status"), f"{c.get('r', 0):.2f}", f"{c.get('r2', 0):.2f}",
                         round(c["drift_ms"]) if "drift_ms" in c else "", c.get("note", "")])
         for c in skipped:
-            w.writerow([c["cam"], c["file"], c["fps"], round(c["dur"], 2), c["tc"] or "", "", "skipped-fps",
-                        "", "", "", ""])
+            w.writerow([c["cam"], c["file"], f"{c['fps']:.3f}" if c["fps"] else "", f"{c['dur']:.2f}", c["tc"] or "",
+                        "", "", "skipped-fps", "", "", "", ""])
 
     print("\nИтог:")
     for cam in cams:

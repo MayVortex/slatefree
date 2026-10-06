@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
 
 permissions:
@@ -24,3 +24,9 @@ jobs:
         run: |
           $out = & .\target\release\slatefree.exe --help --lang en | Out-String
           if ($out -notmatch 'slatefree') { Write-Error "unexpected help output"; exit 1 }
+      # test builds: gh run download <run-id> -n slatefree-exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slatefree-exe
+          path: target/release/slatefree.exe
+          retention-days: 14

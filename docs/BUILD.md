@@ -4,6 +4,19 @@ Release binaries are built automatically by GitHub Actions when a `v*` tag is pu
 ([`release.yml`](../.github/workflows/release.yml)): the workflow builds `slatefree.exe`, downloads FFmpeg and
 attaches `slatefree-vX.Y.Z-windows-x64.zip` to the GitHub release. You only need a local build to hack on the code.
 
+## Test build without a local toolchain (GitHub Actions)
+
+Every push to any branch runs [`ci.yml`](../.github/workflows/ci.yml): tests, release build, and the built
+`slatefree.exe` is kept as a run artifact for 14 days. To try a change on your own footage:
+
+```powershell
+git switch -c my-change; git commit -am "..."; git push -u origin my-change
+gh run watch                                   # wait for CI
+gh run download -n slatefree-exe -D test-build # slatefree.exe of the latest run on this branch
+```
+
+Put `ffmpeg.exe` next to it and run it on a shoot you have already checked in Resolve (see *Validating a change*).
+
 ## Windows, native
 
 Install [Rust](https://rustup.rs) (it will offer to install the Visual Studio C++ Build Tools), then:
