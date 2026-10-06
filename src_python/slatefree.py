@@ -10,7 +10,16 @@ handy for experimenting without a compiler. Console messages are in Russian.
 
 Output: <shoot>/SYNC/<shoot>_sync.xml (FCP7 XML for DaVinci Resolve) + sync_result.csv
 """
-import argparse, csv, fnmatch, math, os, re, struct, subprocess, sys, time
+import argparse
+import csv
+import fnmatch
+import math
+import os
+import re
+import struct
+import subprocess
+import sys
+import time
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from xml.sax.saxutils import escape
@@ -43,7 +52,7 @@ def snap_fps(f):
 
 def probe(path):
     r = subprocess.run([FFMPEG, "-hide_banner", "-i", path], capture_output=True,
-                       text=True, errors="replace").stderr
+                       text=True, errors="replace", check=False).stderr
     d = {"path": path, "file": os.path.basename(path), "size": os.path.getsize(path)}
     m = re.search(r"Duration: (\d+):(\d+):([\d.]+)", r)
     d["dur"] = int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3]) if m else 0.0
@@ -81,7 +90,7 @@ def extract(path, cache):
     if os.path.exists(dst):
         return dst
     r = subprocess.run([FFMPEG, "-v", "error", "-i", path, "-vn", "-ac", "1", "-ar", str(SR),
-                        "-f", "f32le", "-"], capture_output=True)
+                        "-f", "f32le", "-"], capture_output=True, check=False)
     a = np.frombuffer(r.stdout, dtype=np.float32)
     np.save(dst, a)
     return dst
@@ -175,14 +184,14 @@ class Master:
         self.flux = np.zeros(int((T1 - self.T0) * ESR) + 1, np.float32)
         for t in self.takes:
             f = flux(np.load(t["npy"], mmap_mode="r"))
-            i = int(round((t["start"] - self.T0) * ESR))
+            i = round(float((t["start"] - self.T0) * ESR))
             self.flux[i:i + len(f)] = f[:len(self.flux) - i]
 
     def wave(self, t, n):
         out = np.zeros(n, np.float32)
         for tk in self.takes:
             a = np.load(tk["npy"], mmap_mode="r")
-            i0 = int(round((t - tk["start"]) * SR))
+            i0 = round(float((t - tk["start"]) * SR))
             lo, hi = max(0, i0), min(len(a), i0 + n)
             if hi > lo:
                 out[lo - i0:hi - i0] = a[lo:hi]
@@ -426,7 +435,7 @@ class ClipWave:
 
     def wave(self, t, n):
         out = np.zeros(n, np.float32)
-        i0 = int(round(t * SR))
+        i0 = round(float(t * SR))
         lo, hi = max(0, i0), min(len(self.a), i0 + n)
         if hi > lo:
             out[lo - i0:hi - i0] = self.a[lo:hi]
@@ -495,7 +504,7 @@ def write_xmeml(path, name, M, cams, clips, fps, label_offset):
         t["src_end"] = math.floor((tref + t["len"]) * fps + 1e-9)
         t["eff"] = t["start"] + (t["src0"] / fps - tref)
     # labels read like the first camera's clock at recorder start, then count real frames
-    F0 = int(round((M.takes[0]["eff"] + label_offset) * tb))
+    F0 = round(float((M.takes[0]["eff"] + label_offset) * tb))
     for t in M.takes:
         t["frame"] = F0 + round((t["eff"] - M.takes[0]["eff"]) * fps)
 
@@ -577,7 +586,8 @@ def write_xmeml(path, name, M, cams, clips, fps, label_offset):
            f"</samplecharacteristics></format>" + "".join(track(v) for v in vtr) +
            "</video><audio><numOutputChannels>2</numOutputChannels>" + "".join(track(a) for a in atr) +
            "</audio></media></sequence></xmeml>\n")
-    open(path, "w", encoding="utf-8").write(xml)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(xml)
 
 # --------------------------------------------------------------------------- main
 
